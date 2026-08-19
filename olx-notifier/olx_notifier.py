@@ -37,18 +37,27 @@ if os.path.exists(env_path):
 
 # Configuration
 DEFAULT_QUERIES = "samsung s22 ultra, samsung s23 ultra, samsung note 20 ultra"
-DEFAULT_LOCATIONS = "mumbai, bombay, maharashtra, bengaluru, bangalore, karnataka, powai, yelahanka"
-
 raw_queries = os.getenv("SEARCH_QUERIES", os.getenv("SEARCH_QUERY", DEFAULT_QUERIES))
 SEARCH_QUERIES = [q.strip() for q in raw_queries.split(",") if q.strip()]
-
-raw_locations = os.getenv("LOCATION_FILTERS", DEFAULT_LOCATIONS)
-LOCATION_FILTERS = [l.strip().lower() for l in raw_locations.split(",") if l.strip()]
 
 OLX_REGION = os.getenv("OLX_REGION", "in").lower().strip()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 SEEN_FILE = os.getenv("SEEN_FILE", "seen_ids.json")
+
+# Keywords covering 100% of all Mumbai and Bangalore / Bengaluru locations
+MUMBAI_KEYWORDS = [
+    "mumbai", "bombay", "navi mumbai", "thane", "powai", "andheri", "bandra", "dadar",
+    "borivali", "kurla", "malad", "chembur", "ghatkopar", "kandivali", "goregaon",
+    "mira road", "bhayandar", "worli", "juhu", "vashi", "kalyan", "dombivli", "panvel"
+]
+
+BANGALORE_KEYWORDS = [
+    "bangalore", "bengaluru", "yelahanka", "rajaji nagar", "indiranagar", "whitefield",
+    "koramangala", "electronic city", "jayanagar", "btm", "hsr", "marathahalli",
+    "hebbal", "malleshwaram", "banashankari", "thanisandra", "majestic", "yeshwanthpur",
+    "bellandur", "sarjapur", "kengeri", "kalyan nagar", "nagawara", "kr puram"
+]
 
 
 def safe_float(val, default):
@@ -91,19 +100,22 @@ def save_seen_ids(seen_ids):
 
 
 def is_location_match(item):
-    """Check if item location matches target locations (Mumbai & Bengaluru)."""
-    if not LOCATION_FILTERS:
-        return True
-    
+    """Check if item location belongs to ANY location in Mumbai or Bangalore."""
     locations = item.get("locations_resolved", {})
-    resolved_str = " ".join([str(v) for v in locations.values()]).lower()
-    loc_list_str = " ".join([json.dumps(l) for l in item.get("locations", [])]).lower()
-    title_str = item.get("title", "").lower()
-    desc_str = item.get("description", "").lower()
+    city = str(locations.get("ADMIN_LEVEL_3_name", "")).lower()
+    state = str(locations.get("ADMIN_LEVEL_1_name", "")).lower()
+    sub_locality = str(locations.get("SUBLOCALITY_LEVEL_1_name", "") or locations.get("ADMIN_LEVEL_4_name", "")).lower()
+    
+    loc_combined = f"{sub_locality} {city} {state}".strip()
+    if not loc_combined:
+        # Fallback to locations array
+        loc_combined = " ".join([json.dumps(l) for l in item.get("locations", [])]).lower()
 
-    combined_text = f"{resolved_str} {loc_list_str} {title_str} {desc_str}"
+    # Check if in Mumbai region or Bangalore region
+    in_mumbai = any(k in loc_combined for k in MUMBAI_KEYWORDS)
+    in_bangalore = any(k in loc_combined for k in BANGALORE_KEYWORDS)
 
-    return any(loc in combined_text for loc in LOCATION_FILTERS)
+    return in_mumbai or in_bangalore
 
 
 def send_telegram_notification(title, price, location, link, query_matched, description="", image_url=None):
@@ -180,8 +192,6 @@ def fetch_olx_items_api_in(query):
         raw_items = data.get("data", [])
         parsed_items = []
 
-        print(f"Fetched {len(raw_items)} total live items for '{query}'")
-
         for item in raw_items:
             item_id = str(item.get("id"))
             title = item.get("title", "No Title")
@@ -205,7 +215,7 @@ def fetch_olx_items_api_in(query):
             loc_parts = [p for p in [sub_locality, city, state] if p]
             location_str = ", ".join(loc_parts) or "Unknown Location"
 
-            # Check location filter
+            # Check location filter (All Mumbai & Bangalore)
             if not is_location_match(item):
                 continue
 
@@ -234,10 +244,10 @@ def fetch_olx_items_api_in(query):
 
 
 def check_olx():
-    """Main check function."""
+    """Main check function covering all of Mumbai and Bangalore."""
     print("==================================================")
-    print(f"Target Queries: {SEARCH_QUERIES}")
-    print(f"Target Locations: {LOCATION_FILTERS}")
+    print(f"Target Models: {SEARCH_QUERIES}")
+    print("Target Locations: ALL LOCATIONS IN MUMBAI & BANGALORE")
     print("==================================================")
     
     seen_ids = load_seen_ids()
@@ -246,7 +256,7 @@ def check_olx():
     for query in SEARCH_QUERIES:
         print(f"\nScanning OLX for: '{query}'...")
         items = fetch_olx_items_api_in(query)
-        print(f"Found {len(items)} items matching location filter.")
+        print(f"Found {len(items)} items in Mumbai/Bangalore.")
 
         for item in reversed(items):
             item_id = item["id"]
