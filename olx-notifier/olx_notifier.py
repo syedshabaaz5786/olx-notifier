@@ -2,7 +2,6 @@ import os
 import sys
 import json
 import time
-import requests
 import html
 from urllib.parse import quote
 
@@ -12,6 +11,16 @@ if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8')
     except Exception:
         pass
+
+# Prefer curl_cffi for real browser TLS impersonation (bypasses Cloudflare)
+try:
+    from curl_cffi import requests as c_requests
+    USE_CURL_CFFI = True
+except ImportError:
+    import requests as c_requests
+    USE_CURL_CFFI = False
+
+import requests as std_requests
 
 # Load .env file if present
 env_path = os.path.join(os.path.dirname(__file__), ".env")
@@ -139,7 +148,7 @@ def send_telegram_notification(title, price, location, link, query_matched, desc
         }
 
     try:
-        res = requests.post(url, json=payload, timeout=10)
+        res = std_requests.post(url, json=payload, timeout=10)
         if res.status_code == 200:
             print(f"[SUCCESS] Telegram alert sent for: {title}")
             return True
@@ -153,12 +162,16 @@ def send_telegram_notification(title, price, location, link, query_matched, desc
 
 
 def fetch_olx_items_api_in(query):
-    """Fetch items from OLX India JSON API."""
+    """Fetch items from OLX India JSON API using real Chrome TLS impersonation."""
     encoded_query = quote(query)
     api_url = f"https://www.olx.in/api/relevance/v2/search?query={encoded_query}&size=50"
     
     try:
-        response = requests.get(api_url, headers=HEADERS, timeout=15)
+        if USE_CURL_CFFI:
+            response = c_requests.get(api_url, headers=HEADERS, impersonate="chrome124", timeout=15)
+        else:
+            response = std_requests.get(api_url, headers=HEADERS, timeout=15)
+
         if response.status_code != 200:
             print(f"[API Status {response.status_code} for query '{query}']")
             return []
@@ -167,7 +180,7 @@ def fetch_olx_items_api_in(query):
         raw_items = data.get("data", [])
         parsed_items = []
 
-        print(f"Fetched {len(raw_items)} total items for '{query}'")
+        print(f"Fetched {len(raw_items)} total live items for '{query}'")
 
         for item in raw_items:
             item_id = str(item.get("id"))
@@ -233,12 +246,12 @@ def check_olx():
     for query in SEARCH_QUERIES:
         print(f"\nScanning OLX for: '{query}'...")
         items = fetch_olx_items_api_in(query)
-        print(f"Found {len(items)} items matching Mumbai/Bengaluru filter.")
+        print(f"Found {len(items)} items matching location filter.")
 
         for item in reversed(items):
             item_id = item["id"]
             if item_id not in seen_ids:
-                print(f"-> MATCH! ID: {item_id} | Title: {item['title']} | Location: {item['location']}")
+                print(f"-> NEW MATCH! ID: {item_id} | Title: {item['title']} | Location: {item['location']}")
                 send_telegram_notification(
                     title=item["title"],
                     price=item["price"],
