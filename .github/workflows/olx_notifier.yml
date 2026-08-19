@@ -1,0 +1,48 @@
+name: OLX New Listing Notifier
+
+on:
+  schedule:
+    # Cron Schedule Examples:
+    # - '*/10 * * * *' : Every 10 minutes (Best for Public Repos - Unlimited free minutes)
+    # - '*/20 * * * *' : Every 20 minutes (Stays within Free tier for Private Repos)
+    # - '*/30 * * * *' : Every 30 minutes
+    - cron: '*/30 * * * *'  # Runs every 30 minutes
+  workflow_dispatch:        # Allows manual run anytime from GitHub UI
+
+jobs:
+  check-olx:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r olx-notifier/requirements.txt
+
+      - name: Run OLX Notifier
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SEARCH_QUERIES: ${{ secrets.SEARCH_QUERIES }}
+          LOCATION_FILTERS: ${{ secrets.LOCATION_FILTERS }}
+          OLX_REGION: ${{ secrets.OLX_REGION }}
+          MIN_PRICE: ${{ secrets.MIN_PRICE }}
+          MAX_PRICE: ${{ secrets.MAX_PRICE }}
+          SEEN_FILE: 'olx-notifier/seen_ids.json'
+        run: |
+          cd olx-notifier
+          python olx_notifier.py
+
+      - name: Commit seen_ids.json so duplicate alerts are avoided
+        uses: stefanzweifel/git-auto-commit-action@v4
+        with:
+          commit_message: "chore: update seen_ids.json [skip ci]"
+          file_pattern: "olx-notifier/seen_ids.json"
