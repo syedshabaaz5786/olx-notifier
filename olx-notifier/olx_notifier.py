@@ -31,7 +31,7 @@ DEFAULT_QUERIES = "samsung s22 ultra, samsung s23 ultra, samsung note 20 ultra"
 DEFAULT_LOCATIONS = "powai, mumbai, yelahanka, bengaluru, bangalore"
 
 raw_queries = os.getenv("SEARCH_QUERIES", os.getenv("SEARCH_QUERY", DEFAULT_QUERIES))
-SEARCH_QUERIES = [q.strip() for q in raw_queries.split(",") if q.strip()]
+BASE_QUERIES = [q.strip() for q in raw_queries.split(",") if q.strip()]
 
 raw_locations = os.getenv("LOCATION_FILTERS", DEFAULT_LOCATIONS)
 LOCATION_FILTERS = [l.strip().lower() for l in raw_locations.split(",") if l.strip()]
@@ -40,6 +40,7 @@ OLX_REGION = os.getenv("OLX_REGION", "in").lower().strip()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 SEEN_FILE = os.getenv("SEEN_FILE", "seen_ids.json")
+
 def safe_float(val, default):
     if not val or not str(val).strip():
         return float(default)
@@ -78,12 +79,25 @@ def save_seen_ids(seen_ids):
         print(f"Error saving {SEEN_FILE}: {e}")
 
 
-def is_location_match(item_location):
-    """Check if item location matches user-specified target locations."""
+def is_location_match(item):
+    """Check if item location or text matches target locations."""
     if not LOCATION_FILTERS:
         return True
-    location_lower = item_location.lower()
-    return any(loc in location_lower for loc in LOCATION_FILTERS)
+    
+    # Check resolved locations dict
+    locations = item.get("locations_resolved", {})
+    resolved_str = " ".join([str(v) for v in locations.values()]).lower()
+
+    # Check locations list
+    loc_list_str = " ".join([json.dumps(l) for l in item.get("locations", [])]).lower()
+
+    # Check title and description as backup
+    title_str = item.get("title", "").lower()
+    desc_str = item.get("description", "").lower()
+
+    combined_text = f"{resolved_str} {loc_list_str} {title_str} {desc_str}"
+
+    return any(loc in combined_text for loc in LOCATION_FILTERS)
 
 
 def send_telegram_notification(title, price, location, link, query_matched, description="", image_url=None):
@@ -155,7 +169,7 @@ def send_telegram_notification(title, price, location, link, query_matched, desc
 def fetch_olx_items_api_in(query):
     """Fetch items from OLX India JSON API."""
     encoded_query = quote(query)
-    api_url = f"https://www.olx.in/api/relevance/v2/search?query={encoded_query}&size=30"
+    api_url = f"https://www.olx.in/api/relevance/v2/search?query={encoded_query}&size=50"
     
     try:
         response = requests.get(api_url, headers=HEADERS, timeout=15)
@@ -166,6 +180,8 @@ def fetch_olx_items_api_in(query):
         data = response.json()
         raw_items = data.get("data", [])
         parsed_items = []
+
+        print(f"Raw items returned by OLX for '{query}': {len(raw_items)}")
 
         for item in raw_items:
             item_id = str(item.get("id"))
@@ -191,7 +207,7 @@ def fetch_olx_items_api_in(query):
             location_str = ", ".join(loc_parts) or "Unknown Location"
 
             # Check location filter
-            if not is_location_match(location_str):
+            if not is_location_match(item):
                 continue
 
             # Image & Link
@@ -220,18 +236,24 @@ def fetch_olx_items_api_in(query):
 
 def check_olx():
     """Main check function running over all search queries."""
+    # Create search queries list including city keywords to catch all listings
+    search_queries = list(BASE_QUERIES)
+    for q in BASE_QUERIES:
+        search_queries.append(f"{q} mumbai")
+        search_queries.append(f"{q} bengaluru")
+
     print("==================================================")
-    print(f"Target Search Queries: {SEARCH_QUERIES}")
+    print(f"Target Base Queries: {BASE_QUERIES}")
     print(f"Target Locations: {LOCATION_FILTERS}")
     print("==================================================")
     
     seen_ids = load_seen_ids()
     total_new = 0
 
-    for query in SEARCH_QUERIES:
+    for query in search_queries:
         print(f"\nScanning OLX for: '{query}'...")
         items = fetch_olx_items_api_in(query)
-        print(f"Found {len(items)} items matching query and location filter.")
+        print(f"Found {len(items)} items matching location filter.")
 
         for item in reversed(items):
             item_id = item["id"]
