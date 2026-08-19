@@ -36,7 +36,7 @@ jobs:
           OLX_REGION: ${{ secrets.OLX_REGION }}
           MIN_PRICE: ${{ secrets.MIN_PRICE }}
           MAX_PRICE: ${{ secrets.MAX_PRICE }}
-          SEEN_FILE: 'olx-notifier/seen_ids.json'
+          SEEN_FILE: 'seen_ids.json'
         run: |
           cd olx-notifier
           python olx_notifier.py
