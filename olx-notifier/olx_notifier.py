@@ -4,8 +4,6 @@ import json
 import time
 import requests
 import html
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 from urllib.parse import quote
 
 # Fix Windows console UTF-8 printing
@@ -28,12 +26,12 @@ if os.path.exists(env_path):
     except Exception as e:
         print(f"Notice: Could not load .env file: {e}")
 
-# Configuration (from environment variables or defaults)
+# Configuration
 DEFAULT_QUERIES = "samsung s22 ultra, samsung s23 ultra, samsung note 20 ultra"
 DEFAULT_LOCATIONS = "mumbai, bombay, maharashtra, bengaluru, bangalore, karnataka, powai, yelahanka"
 
 raw_queries = os.getenv("SEARCH_QUERIES", os.getenv("SEARCH_QUERY", DEFAULT_QUERIES))
-BASE_QUERIES = [q.strip() for q in raw_queries.split(",") if q.strip()]
+SEARCH_QUERIES = [q.strip() for q in raw_queries.split(",") if q.strip()]
 
 raw_locations = os.getenv("LOCATION_FILTERS", DEFAULT_LOCATIONS)
 LOCATION_FILTERS = [l.strip().lower() for l in raw_locations.split(",") if l.strip()]
@@ -56,20 +54,11 @@ def safe_float(val, default):
 MIN_PRICE = safe_float(os.getenv("MIN_PRICE"), 0)
 MAX_PRICE = safe_float(os.getenv("MAX_PRICE"), 999999999)
 
-# Setup HTTP Session with retry adapter and browser headers
-session = requests.Session()
-retries = Retry(total=3, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
-session.mount('https://', HTTPAdapter(max_retries=retries))
-session.headers.update({
+HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "en-IN,en-GB;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Referer": "https://www.olx.in/",
-    "Origin": "https://www.olx.in",
-    "Sec-Fetch-Dest": "empty",
-    "Sec-Fetch-Mode": "cors",
-    "Sec-Fetch-Site": "same-origin",
-})
+}
 
 
 def load_seen_ids():
@@ -93,7 +82,7 @@ def save_seen_ids(seen_ids):
 
 
 def is_location_match(item):
-    """Check if item location or text matches target locations."""
+    """Check if item location matches target locations (Mumbai & Bengaluru)."""
     if not LOCATION_FILTERS:
         return True
     
@@ -119,17 +108,7 @@ def send_telegram_notification(title, price, location, link, query_matched, desc
         safe_description = safe_description[:297] + "..."
 
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("\n==========================================")
-        print("SIMULATED TELEGRAM PUSH NOTIFICATION")
-        print("==========================================")
-        print(f"[Alert] New OLX Listing Matched: [{query_matched.upper()}]")
-        print(f"Model: {title}")
-        print(f"Price: {price}")
-        print(f"Location: {location}")
-        print(f"Description: {description}")
-        print(f"Image URL: {image_url or 'N/A'}")
-        print(f"Direct Link: {link}")
-        print("==========================================\n")
+        print(f"[PREVIEW] New Match: {title} | {price} | {location}\nLink: {link}\n")
         return False
 
     message = (
@@ -176,17 +155,19 @@ def send_telegram_notification(title, price, location, link, query_matched, desc
 def fetch_olx_items_api_in(query):
     """Fetch items from OLX India JSON API."""
     encoded_query = quote(query)
-    api_url = f"https://www.olx.in/api/relevance/v2/search?query={encoded_query}&size=40"
+    api_url = f"https://www.olx.in/api/relevance/v2/search?query={encoded_query}&size=50"
     
     try:
-        response = session.get(api_url, timeout=20)
+        response = requests.get(api_url, headers=HEADERS, timeout=15)
         if response.status_code != 200:
-            print(f"[API Status {response.status_code} for '{query}']")
+            print(f"[API Status {response.status_code} for query '{query}']")
             return []
 
         data = response.json()
         raw_items = data.get("data", [])
         parsed_items = []
+
+        print(f"Fetched {len(raw_items)} total items for '{query}'")
 
         for item in raw_items:
             item_id = str(item.get("id"))
@@ -241,29 +222,23 @@ def fetch_olx_items_api_in(query):
 
 def check_olx():
     """Main check function."""
-    # Build search query list
-    search_queries = list(BASE_QUERIES)
-    for q in BASE_QUERIES:
-        search_queries.append(f"{q} mumbai")
-        search_queries.append(f"{q} bangalore")
-
     print("==================================================")
-    print(f"Target Base Queries: {BASE_QUERIES}")
+    print(f"Target Queries: {SEARCH_QUERIES}")
     print(f"Target Locations: {LOCATION_FILTERS}")
     print("==================================================")
     
     seen_ids = load_seen_ids()
     total_new = 0
 
-    for query in search_queries:
+    for query in SEARCH_QUERIES:
         print(f"\nScanning OLX for: '{query}'...")
         items = fetch_olx_items_api_in(query)
-        print(f"Found {len(items)} items matching location filter.")
+        print(f"Found {len(items)} items matching Mumbai/Bengaluru filter.")
 
         for item in reversed(items):
             item_id = item["id"]
             if item_id not in seen_ids:
-                print(f"-> NEW MATCH! ID: {item_id} | Title: {item['title']} | Location: {item['location']}")
+                print(f"-> MATCH! ID: {item_id} | Title: {item['title']} | Location: {item['location']}")
                 send_telegram_notification(
                     title=item["title"],
                     price=item["price"],
@@ -276,7 +251,7 @@ def check_olx():
                 seen_ids.add(item_id)
                 total_new += 1
                 time.sleep(1)
-        time.sleep(1.5)
+        time.sleep(1)
 
     save_seen_ids(seen_ids)
     print(f"\nFinished check run. Total new alerts sent: {total_new}\n")
