@@ -40,8 +40,16 @@ OLX_REGION = os.getenv("OLX_REGION", "in").lower().strip()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 SEEN_FILE = os.getenv("SEEN_FILE", "seen_ids.json")
-MIN_PRICE = float(os.getenv("MIN_PRICE", 0))
-MAX_PRICE = float(os.getenv("MAX_PRICE", 999999999))
+def safe_float(val, default):
+    if not val or not str(val).strip():
+        return float(default)
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return float(default)
+
+MIN_PRICE = safe_float(os.getenv("MIN_PRICE"), 0)
+MAX_PRICE = safe_float(os.getenv("MAX_PRICE"), 999999999)
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
