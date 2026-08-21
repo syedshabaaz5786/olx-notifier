@@ -36,7 +36,7 @@ if os.path.exists(env_path):
         print(f"Notice: Could not load .env file: {e}")
 
 # Configuration
-DEFAULT_QUERIES = "samsung s22 ultra, samsung s23 ultra, samsung note 20 ultra"
+DEFAULT_QUERIES = "samsung s22 ultra, samsung s23 ultra, samsung s24 ultra, samsung note 20 ultra"
 raw_queries = os.getenv("SEARCH_QUERIES", os.getenv("SEARCH_QUERY", DEFAULT_QUERIES))
 SEARCH_QUERIES = [q.strip() for q in raw_queries.split(",") if q.strip()]
 
