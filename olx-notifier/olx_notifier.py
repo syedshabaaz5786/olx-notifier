@@ -42,8 +42,9 @@ SEARCH_QUERIES = [q.strip() for q in raw_queries.split(",") if q.strip()]
 
 OLX_REGION = os.getenv("OLX_REGION", "in").lower().strip()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "1118627196")
 SEEN_FILE = os.getenv("SEEN_FILE", "seen_ids.json")
+SUBSCRIBERS_FILE = os.getenv("SUBSCRIBERS_FILE", "subscribers.json")
 
 # Keywords covering 100% of all Mumbai and Bangalore / Bengaluru locations
 MUMBAI_KEYWORDS = [
@@ -79,6 +80,73 @@ HEADERS = {
 }
 
 
+def load_subscribers():
+    """Load all subscribed Telegram chat IDs."""
+    subscribers = set()
+    
+    # 1. Add chat IDs from environment variables
+    if TELEGRAM_CHAT_ID:
+        for cid in TELEGRAM_CHAT_ID.split(","):
+            cid = cid.strip()
+            if cid:
+                subscribers.add(cid)
+    
+    # 2. Add chat IDs from subscribers.json file
+    if os.path.exists(SUBSCRIBERS_FILE):
+        try:
+            with open(SUBSCRIBERS_FILE, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+                for cid in saved:
+                    subscribers.add(str(cid).strip())
+        except Exception as e:
+            print(f"Notice reading {SUBSCRIBERS_FILE}: {e}")
+
+    # 3. Auto-discover any new users who interacted with the bot on Telegram
+    if TELEGRAM_BOT_TOKEN:
+        try:
+            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
+            res = std_requests.get(url, timeout=10)
+            if res.status_code == 200:
+                updates = res.json().get("result", [])
+                for update in updates:
+                    msg = update.get("message") or update.get("edited_message")
+                    if msg:
+                        chat = msg.get("chat", {})
+                        cid = str(chat.get("id"))
+                        first_name = chat.get("first_name", "Friend")
+                        if cid and cid not in subscribers:
+                            print(f"[NEW SUBSCRIBER DISCOVERED] User: {first_name} | Chat ID: {cid}")
+                            subscribers.add(cid)
+                            # Send welcome confirmation to new user
+                            welcome_msg = (
+                                f"🎉 <b>Welcome {first_name}!</b>\n\n"
+                                f"You are now <b>Subscribed</b> to the OLX Deal Alert Bot!\n\n"
+                                f"📱 <b>Models Tracked:</b>\n"
+                                f"• Samsung S24 Ultra\n"
+                                f"• Samsung S23 Ultra\n"
+                                f"• Samsung S22 Ultra\n"
+                                f"• Samsung Note 20 Ultra\n\n"
+                                f"📍 <b>Locations:</b> All of Mumbai & Bangalore\n\n"
+                                f"<i>You will receive instant alerts right here whenever a new listing is posted!</i>"
+                            )
+                            std_requests.post(
+                                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                                json={"chat_id": cid, "text": welcome_msg, "parse_mode": "HTML"},
+                                timeout=10
+                            )
+        except Exception as e:
+            print(f"Notice auto-discovering subscribers: {e}")
+
+    # Save all unique subscribers back to file
+    try:
+        with open(SUBSCRIBERS_FILE, "w", encoding="utf-8") as f:
+            json.dump(list(subscribers), f, indent=2)
+    except Exception as e:
+        print(f"Notice saving {SUBSCRIBERS_FILE}: {e}")
+
+    return list(subscribers)
+
+
 def load_seen_ids():
     """Load list of previously notified item IDs."""
     if os.path.exists(SEEN_FILE):
@@ -111,15 +179,14 @@ def is_location_match(item):
         # Fallback to locations array
         loc_combined = " ".join([json.dumps(l) for l in item.get("locations", [])]).lower()
 
-    # Check if in Mumbai region or Bangalore region
     in_mumbai = any(k in loc_combined for k in MUMBAI_KEYWORDS)
     in_bangalore = any(k in loc_combined for k in BANGALORE_KEYWORDS)
 
     return in_mumbai or in_bangalore
 
 
-def send_telegram_notification(title, price, location, link, query_matched, description="", image_url=None):
-    """Send notification to Telegram via Bot API."""
+def send_telegram_notification(title, price, location, link, query_matched, subscribers, description="", image_url=None):
+    """Broadcast notification to ALL subscribed Telegram users."""
     safe_title = html.escape(title)
     safe_price = html.escape(str(price))
     safe_location = html.escape(location)
@@ -128,7 +195,7 @@ def send_telegram_notification(title, price, location, link, query_matched, desc
     if len(safe_description) > 300:
         safe_description = safe_description[:297] + "..."
 
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+    if not TELEGRAM_BOT_TOKEN or not subscribers:
         print(f"[PREVIEW] New Match: {title} | {price} | {location}\nLink: {link}\n")
         return False
 
@@ -142,35 +209,39 @@ def send_telegram_notification(title, price, location, link, query_matched, desc
         f"🔗 <b>Direct OLX Ad Link:</b>\n{link}"
     )
 
-    if image_url:
-        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
-        payload = {
-            "chat_id": TELEGRAM_CHAT_ID,
-            "photo": image_url,
-            "caption": message,
-            "parse_mode": "HTML",
-        }
-    else:
-        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        payload = {
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": message,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": False,
-        }
-
-    try:
-        res = std_requests.post(url, json=payload, timeout=10)
-        if res.status_code == 200:
-            print(f"[SUCCESS] Telegram alert sent for: {title}")
-            return True
-        else:
+    success_count = 0
+    for chat_id in subscribers:
+        try:
             if image_url:
-                return send_telegram_notification(title, price, location, link, query_matched, description, image_url=None)
-            print(f"[ERROR] Telegram API Error: {res.status_code} - {res.text}")
-    except Exception as e:
-        print(f"[ERROR] Exception sending Telegram alert: {e}")
-    return False
+                url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
+                payload = {
+                    "chat_id": chat_id,
+                    "photo": image_url,
+                    "caption": message,
+                    "parse_mode": "HTML",
+                }
+            else:
+                url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+                payload = {
+                    "chat_id": chat_id,
+                    "text": message,
+                    "parse_mode": "HTML",
+                    "disable_web_page_preview": False,
+                }
+
+            res = std_requests.post(url, json=payload, timeout=10)
+            if res.status_code == 200:
+                success_count += 1
+            else:
+                # Fallback to text message if photo fails
+                if image_url:
+                    text_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+                    std_requests.post(text_url, json={"chat_id": chat_id, "text": message, "parse_mode": "HTML"}, timeout=10)
+        except Exception as e:
+            print(f"[ERROR] Failed sending alert to chat_id {chat_id}: {e}")
+
+    print(f"[BROADCAST] Alert for '{title}' delivered to {success_count}/{len(subscribers)} subscribers.")
+    return success_count > 0
 
 
 def fetch_olx_items_api_in(query):
@@ -244,10 +315,12 @@ def fetch_olx_items_api_in(query):
 
 
 def check_olx():
-    """Main check function covering all of Mumbai and Bangalore."""
+    """Main check function broadcasting to all subscribers."""
+    subscribers = load_subscribers()
     print("==================================================")
     print(f"Target Models: {SEARCH_QUERIES}")
-    print("Target Locations: ALL LOCATIONS IN MUMBAI & BANGALORE")
+    print(f"Target Locations: ALL OF MUMBAI & BANGALORE")
+    print(f"Subscribers List: {subscribers}")
     print("==================================================")
     
     seen_ids = load_seen_ids()
@@ -268,6 +341,7 @@ def check_olx():
                     location=item["location"],
                     link=item["link"],
                     query_matched=item["query"],
+                    subscribers=subscribers,
                     description=item["description"],
                     image_url=item["image_url"]
                 )
