@@ -41,8 +41,8 @@ jobs:
           cd olx-notifier
           python olx_notifier.py
 
-      - name: Commit seen_ids.json so duplicate alerts are avoided
+      - name: Commit state so duplicate alerts are avoided and subscribers are saved
         uses: stefanzweifel/git-auto-commit-action@v4
         with:
-          commit_message: "chore: update seen_ids.json [skip ci]"
-          file_pattern: "olx-notifier/seen_ids.json"
+          commit_message: "chore: update seen_ids and subscribers [skip ci]"
+          file_pattern: "olx-notifier/seen_ids.json olx-notifier/subscribers.json"
